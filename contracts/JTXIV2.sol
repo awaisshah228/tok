@@ -59,6 +59,7 @@ contract JTXV2 is JTXI {
     mapping(uint256 => Presale) public presale;
 
     IERC20 public SaleToken;
+    address tokenProvider;
 
     event PresaleCreated(
         uint256 indexed _id,
@@ -82,8 +83,6 @@ contract JTXV2 is JTXI {
         uint256 timestamp
     );
 
-  
-
     event PresaleTokenAddressUpdated(
         address indexed prevValue,
         address indexed newValue,
@@ -95,6 +94,10 @@ contract JTXV2 is JTXI {
 
     function setPriceFeedAddress(address _priceFeedAddress) external onlyOwner {
         _priceFeed = AggregatorV3Interface(_priceFeedAddress);
+    }
+
+    function setTokenProvider(address _tokenProvider) external onlyOwner {
+        tokenProvider = _tokenProvider;
     }
 
     function ChangeTokenToSell(address _token) public onlyOwner {
@@ -146,7 +149,7 @@ contract JTXV2 is JTXI {
                 presale[_id].Active == true,
             "Invalid time for buying"
         );
-        
+
         _;
     }
 
@@ -179,8 +182,7 @@ contract JTXV2 is JTXI {
         emit PresaleUnpaused(_id, block.timestamp);
     }
 
-
-      /**
+    /**
      * @dev To get latest ethereum price in 10**18 format
      */
     function getLatestPrice() public view returns (uint256) {
@@ -188,20 +190,36 @@ contract JTXV2 is JTXI {
         return uint256(price);
     }
 
-     function sendValue(address payable recipient, uint256 amount) internal {
+    function sendValue(address payable recipient, uint256 amount) internal {
         require(address(this).balance >= amount, "Low balance");
         (bool success, ) = recipient.call{value: amount}("");
         require(success, "ETH Payment failed");
     }
 
-    
-    
-
-     function buyTokens() checkPresaleId(presaleId) checkSaleState(presaleId) public payable returns (bool){
-        require(_priceFeed != AggregatorV3Interface(address(0)), "Price feed cannot be null");
-        require(address(SaleToken) != address(0), "Sale token address cannot be null");
-        require(msg.value>0,"Value of send bnb must be grate than 0;");
-        require(presale[presaleId].price>0,"Value of send bnb must be grate than 0;");
+    function buyTokens()
+        public
+        payable
+        checkPresaleId(presaleId)
+        checkSaleState(presaleId)
+        returns (bool)
+    {
+        require(
+            _priceFeed != AggregatorV3Interface(address(0)),
+            "Price feed cannot be null"
+        );
+        require(
+            address(SaleToken) != address(0),
+            "Sale token address cannot be null"
+        );
+        require(
+            address(tokenProvider) != address(0),
+            "Token Provider address cannot be null"
+        );
+        require(msg.value > 0, "Value of send bnb must be grate than 0;");
+        require(
+            presale[presaleId].price > 0,
+            "Value of send bnb must be grate than 0;"
+        );
         require(!paused[presaleId], "Presale paused");
         require(presale[presaleId].Active == true, "Presale is not active yet");
 
@@ -209,34 +227,38 @@ contract JTXV2 is JTXI {
         uint256 usdPrice = getLatestPrice();
         uint256 tokenAmount = (bnbAmount * usdPrice) / presale[presaleId].price;
         require(tokenAmount > 0, "Insufficient BNB amount");
-        require(SaleToken.balanceOf(address(this))>tokenAmount,"Dnt have enough token");
+        require(
+            SaleToken.allowance(tokenProvider, address(this)) > tokenAmount,
+            "Dnt have enough token"
+        );
 
-        require(presale[presaleId].Sold + tokenAmount <= presale[presaleId].tokensToSell, "Not enough tokens left for sale");
+        require(
+            presale[presaleId].Sold + tokenAmount <=
+                presale[presaleId].tokensToSell,
+            "Not enough tokens left for sale"
+        );
 
         presale[presaleId].Sold += tokenAmount;
 
-        SaleToken.transfer(msg.sender, tokenAmount);
+        SaleToken.transferFrom(tokenProvider, msg.sender, tokenAmount);
 
-       sendValue(payable(fundReceiver), msg.value);
+        sendValue(payable(fundReceiver), msg.value);
 
-    
-
-        emit TokensBought(msg.sender, presaleId, tokenAmount, bnbAmount, block.timestamp);
+        emit TokensBought(
+            msg.sender,
+            presaleId,
+            tokenAmount,
+            bnbAmount,
+            block.timestamp
+        );
 
         return true;
     }
-
 
     function changeFundWallet(address _wallet) external onlyOwner {
         require(_wallet != address(0), "Invalid parameters");
         fundReceiver = _wallet;
     }
-
-
-    
-
-
-
 
     function WithdrawTokens(address _token, uint256 amount) external onlyOwner {
         IERC20(_token).transfer(fundReceiver, amount);
@@ -245,5 +267,4 @@ contract JTXV2 is JTXI {
     function WithdrawContractFunds(uint256 amount) external onlyOwner {
         sendValue(payable(fundReceiver), amount);
     }
-
 }
