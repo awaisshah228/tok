@@ -5,7 +5,7 @@ async function main() {
 
   
   
-  const Token = await ethers.getContractFactory("JTXI");
+  const Token = await ethers.getContractFactory("JTXV2");
   const token = await upgrades.deployProxy(Token)
   console.log(` deployed to ${token.address}`);
 }

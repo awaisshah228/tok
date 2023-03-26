@@ -37,162 +37,213 @@ interface IERC20 {
 }
 
 contract JTXV2 is JTXI {
+    uint256 public presaleId;
+    uint256 public USDT_MULTIPLIER;
+    uint256 public ETH_MULTIPLIER;
+    address public fundReceiver;
     struct Presale {
-        IERC20 token;
-        uint256 tokenPrice; // in wei
-        uint256 tokensSold;
         uint256 startTime;
         uint256 endTime;
-        uint256 maxTokens;
-        bool isPaused;
+        uint256 price;
+        uint256 Sold;
+        uint256 tokensToSell;
+        uint256 amountRaised;
+        bool Active;
     }
 
-    AggregatorV3Interface internal priceFeed;
+    AggregatorV3Interface internal _priceFeed;
 
-    Presale[] public presales;
-    mapping(uint256 => uint256) public presaleIndex;
-    event PresaleAdded(
-        uint256 indexed presaleIndex,
-        address tokenAddress,
-        uint256 maxTokens,
-        uint256 presaleStartTime,
-        uint256 presaleEndTime,
-        uint256 tokenPrice
-    );
-    event TokensPurchased(
-        uint256 indexed presaleIndex,
-        address indexed buyer,
-        uint256 tokensPurchased
-    );
-    event PresalePaused(uint256 indexed presaleIndex);
-    event PresaleUnpaused(uint256 indexed presaleIndex);
+    // https://docs.chain.link/docs/ethereum-addresses/ => (ETH / USD)
 
-    // constructor(address _priceFeedAddress) {
-    //     priceFeed = AggregatorV3Interface(_priceFeedAddress);
-    // }
+    mapping(uint256 => bool) public paused;
+    mapping(uint256 => Presale) public presale;
+
+    IERC20 public SaleToken;
+
+    event PresaleCreated(
+        uint256 indexed _id,
+        uint256 _totalTokens,
+        uint256 _startTime,
+        uint256 _endTime
+    );
+
+    event PresaleUpdated(
+        bytes32 indexed key,
+        uint256 prevValue,
+        uint256 newValue,
+        uint256 timestamp
+    );
+
+    event TokensBought(
+        address indexed user,
+        uint256 indexed id,
+        uint256 tokensBought,
+        uint256 amountPaid,
+        uint256 timestamp
+    );
+
+  
+
+    event PresaleTokenAddressUpdated(
+        address indexed prevValue,
+        address indexed newValue,
+        uint256 timestamp
+    );
+
+    event PresalePaused(uint256 indexed id, uint256 timestamp);
+    event PresaleUnpaused(uint256 indexed id, uint256 timestamp);
 
     function setPriceFeedAddress(address _priceFeedAddress) external onlyOwner {
-        priceFeed = AggregatorV3Interface(_priceFeedAddress);
+        _priceFeed = AggregatorV3Interface(_priceFeedAddress);
     }
 
-    function addPresale(
-        address _token,
-        uint256 _maxTokens,
-        uint256 _presaleStartTime,
-        uint256 _presaleEndTime,
-        uint256 _tokenPrice
+    function ChangeTokenToSell(address _token) public onlyOwner {
+        SaleToken = IERC20(_token);
+    }
+
+    // /**
+    //  * @dev Creates a new presale
+    //  * @param _price Per token price multiplied by (10**18)
+    //  * @param _tokensToSell No of tokens to sell
+    //  */
+    function createPresale(
+        uint256 _price,
+        uint256 _tokensToSell
     ) external onlyOwner {
-        require(
-            address(priceFeed) != address(0),
-            "Aggregator price feed not set"
-        );
-        require(_maxTokens > 0, "Max tokens must be greater than zero");
-        require(
-            _presaleStartTime > block.timestamp,
-            "Presale start time must be in the future"
-        );
-        require(
-            _presaleEndTime > _presaleStartTime,
-            "Presale end time must be after start time"
-        );
-        require(_tokenPrice > 0, "Token price must be greater than zero");
+        require(_price > 0, "Zero price");
+        require(_tokensToSell > 0, "Zero tokens to sell");
+        require(presale[presaleId].Active == false, "Previous Sale is Active");
 
-        Presale memory newPresale = Presale(
-            IERC20(_token),
-            _tokenPrice,
-            0,
-            _presaleStartTime,
-            _presaleEndTime,
-            _maxTokens,
-            false
-        );
+        presaleId++;
 
-        uint256 allowance = IERC20(_token).allowance(msg.sender, address(this));
-        require(
-            allowance >= _maxTokens,
-            "Allowance not enough to transfer tokens to presale contract"
-        );
+        presale[presaleId] = Presale(0, 0, _price, 0, _tokensToSell, 0, false);
 
-        IERC20(_token).transferFrom(msg.sender, address(this), _maxTokens);
-
-        uint256 index = presales.length;
-        presales.push(newPresale);
-        presaleIndex[index] = index;
-        emit PresaleAdded(
-            index,
-            _token,
-            _maxTokens,
-            _presaleStartTime,
-            _presaleEndTime,
-            _tokenPrice
-        );
+        emit PresaleCreated(presaleId, _tokensToSell, 0, 0);
     }
 
-    function buyTokens(
-        uint256 _presaleIndex,
-        uint256 _tokensToBuy
-    ) external payable {
-        Presale storage presale = presales[presaleIndex[_presaleIndex]];
-        require(
-            block.timestamp >= presale.startTime &&
-                block.timestamp <= presale.endTime,
-            "Presale not active"
-        );
-        require(!presale.isPaused, "Presale is paused");
-        require(
-            presale.tokensSold + _tokensToBuy <= presale.maxTokens,
-            "Not enough tokens left for sale"
-        );
-        uint256 totalPrice = _tokensToBuy * presale.tokenPrice;
-        require(msg.value == totalPrice, "Incorrect payment amount");
-
-        // (, int256 price, , , ) = priceFeed.latestRoundData();
-        uint256 bnbToUsd = getLatestPrice();
-
-        // Calculate the maximum number of tokens the buyer can purchase based on the current BNB/USD price
-        uint256 maxTokens = (msg.value * bnbToUsd) / presale.tokenPrice;
-        require(
-            _tokensToBuy <= maxTokens,
-            "Token purchase exceeds maximum amount allowed based on the current BNB/USD price"
-        );
-
-        presale.tokensSold += _tokensToBuy;
-        presale.token.transfer(msg.sender, _tokensToBuy);
-        emit TokensPurchased(_presaleIndex, msg.sender, _tokensToBuy);
+    function startPresale() public onlyOwner {
+        presale[presaleId].startTime = block.timestamp;
+        presale[presaleId].Active = true;
     }
 
-    function getLatestPrice() public view returns (uint256) {
-        (, int256 price, , , ) = priceFeed.latestRoundData();
+    function endPresale() public onlyOwner {
+        require(
+            presale[presaleId].Active = true,
+            "This presale is already Inactive"
+        );
+        presale[presaleId].endTime = block.timestamp;
+        presale[presaleId].Active = false;
+    }
+
+    modifier checkPresaleId(uint256 _id) {
+        require(_id > 0 && _id <= presaleId, "Invalid presale id");
+        _;
+    }
+
+    modifier checkSaleState(uint256 _id) {
+        require(
+            block.timestamp >= presale[_id].startTime &&
+                presale[_id].Active == true,
+            "Invalid time for buying"
+        );
         
+        _;
+    }
+
+    function updatePresale(
+        uint256 _id,
+        uint256 _price,
+        uint256 _tokensToSell
+    ) external checkPresaleId(_id) onlyOwner {
+        require(_price > 0, "Zero price");
+        require(_tokensToSell > 0, "Zero tokens to sell");
+        presale[_id].price = _price;
+        presale[_id].tokensToSell = _tokensToSell;
+    }
+
+    function pausePresale(uint256 _id) external checkPresaleId(_id) onlyOwner {
+        require(!paused[_id], "Already paused");
+        paused[_id] = true;
+        emit PresalePaused(_id, block.timestamp);
+    }
+
+    /**
+     * @dev To unpause the presale
+     * @param _id Presale id to update
+     */
+    function unPausePresale(
+        uint256 _id
+    ) external checkPresaleId(_id) onlyOwner {
+        require(paused[_id], "Not paused");
+        paused[_id] = false;
+        emit PresaleUnpaused(_id, block.timestamp);
+    }
+
+
+      /**
+     * @dev To get latest ethereum price in 10**18 format
+     */
+    function getLatestPrice() public view returns (uint256) {
+        (, int256 price, , , ) = _priceFeed.latestRoundData();
         return uint256(price);
     }
 
-    function pausePresale(uint256 _presaleIndex) external onlyOwner {
-        Presale storage presale = presales[presaleIndex[_presaleIndex]];
-        require(presale.isPaused == false, "Presale is already paused");
-        presale.isPaused = true;
-        emit PresalePaused(_presaleIndex);
+     function sendValue(address payable recipient, uint256 amount) internal {
+        require(address(this).balance >= amount, "Low balance");
+        (bool success, ) = recipient.call{value: amount}("");
+        require(success, "ETH Payment failed");
     }
 
-    function unpausePresale(uint256 _presaleIndex) external onlyOwner {
-        Presale storage presale = presales[presaleIndex[_presaleIndex]];
-        require(presale.isPaused == true, "Presale is not paused");
-        presale.isPaused = false;
-        emit PresaleUnpaused(_presaleIndex);
+    
+    
+
+     function buyTokens() checkPresaleId(presaleId) checkSaleState(presaleId) public payable returns (bool){
+        require(_priceFeed != AggregatorV3Interface(address(0)), "Price feed cannot be null");
+        require(address(SaleToken) != address(0), "Sale token address cannot be null");
+        require(msg.value>0,"Value of send bnb must be grate than 0;");
+        require(presale[presaleId].price>0,"Value of send bnb must be grate than 0;");
+        require(!paused[presaleId], "Presale paused");
+        require(presale[presaleId].Active == true, "Presale is not active yet");
+
+        uint256 bnbAmount = msg.value;
+        uint256 usdPrice = getLatestPrice();
+        uint256 tokenAmount = (bnbAmount * usdPrice) / presale[presaleId].price;
+        require(tokenAmount > 0, "Insufficient BNB amount");
+        require(SaleToken.balanceOf(address(this))>tokenAmount,"Dnt have enough token");
+
+        require(presale[presaleId].Sold + tokenAmount <= presale[presaleId].tokensToSell, "Not enough tokens left for sale");
+
+        presale[presaleId].Sold += tokenAmount;
+
+        SaleToken.transfer(msg.sender, tokenAmount);
+
+       sendValue(payable(fundReceiver), msg.value);
+
+    
+
+        emit TokensBought(msg.sender, presaleId, tokenAmount, bnbAmount, block.timestamp);
+
+        return true;
     }
 
-    function withdrawFunds() external onlyOwner {
-        payable(owner()).transfer(address(this).balance);
+
+    function changeFundWallet(address _wallet) external onlyOwner {
+        require(_wallet != address(0), "Invalid parameters");
+        fundReceiver = _wallet;
     }
 
-    function withdrawTokens(
-        address _token,
-        uint256 _amount
-    ) external onlyOwner {
-        IERC20(_token).transfer(owner(), _amount);
+
+    
+
+
+
+
+    function WithdrawTokens(address _token, uint256 amount) external onlyOwner {
+        IERC20(_token).transfer(fundReceiver, amount);
     }
 
-    function version() public pure returns (string memory) {
-        return "v2";
+    function WithdrawContractFunds(uint256 amount) external onlyOwner {
+        sendValue(payable(fundReceiver), amount);
     }
+
 }
