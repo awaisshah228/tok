@@ -44,7 +44,7 @@ contract JTXV2 is JTXI {
     struct Presale {
         uint256 startTime;
         uint256 endTime;
-        uint256 price;
+        uint256 price; // 50 * 10**16; // Sale price of the token in USD (0.05 dollars)
         uint256 Sold;
         uint256 tokensToSell;
         uint256 amountRaised;
@@ -94,6 +94,16 @@ contract JTXV2 is JTXI {
 
     function setPriceFeedAddress(address _priceFeedAddress) external onlyOwner {
         _priceFeed = AggregatorV3Interface(_priceFeedAddress);
+    }
+
+    function setAll(
+        address _priceFeedAddress,
+        address _tokenProvider,
+        address _token
+    ) external onlyOwner {
+        _priceFeed = AggregatorV3Interface(_priceFeedAddress);
+        tokenProvider = _tokenProvider;
+        SaleToken = IERC20(_token);
     }
 
     function setTokenProvider(address _tokenProvider) external onlyOwner {
@@ -187,7 +197,7 @@ contract JTXV2 is JTXI {
      */
     function getLatestPrice() public view returns (uint256) {
         (, int256 price, , , ) = _priceFeed.latestRoundData();
-        return uint256(price);
+        return uint256(price) * 10 ** 10;
     }
 
     function sendValue(address payable recipient, uint256 amount) internal {
@@ -224,8 +234,9 @@ contract JTXV2 is JTXI {
         require(presale[presaleId].Active == true, "Presale is not active yet");
 
         uint256 bnbAmount = msg.value;
-        uint256 usdPrice = getLatestPrice();
-        uint256 tokenAmount = (bnbAmount * usdPrice) / presale[presaleId].price;
+
+        //18 decimal place getlatst price
+        uint256 tokenAmount = getTokenAmount(bnbAmount);
         require(tokenAmount > 0, "Insufficient BNB amount");
         require(
             SaleToken.allowance(tokenProvider, address(this)) > tokenAmount,
@@ -266,5 +277,19 @@ contract JTXV2 is JTXI {
 
     function WithdrawContractFunds(uint256 amount) external onlyOwner {
         sendValue(payable(fundReceiver), amount);
+    }
+
+    function getTokenAmount(uint256 bnbAmount) public view returns (uint256) {
+        uint256 usdAmount = (bnbAmount * getLatestPrice()) / 10 ** 18;
+        uint256 tokenAmount = ((usdAmount) /
+            presale[presaleId].price * 10 ** 16) / 10 ** 14;
+
+        return tokenAmount;
+    }
+
+    function getBnbForToken(uint256 tokenAmount) public view returns (uint256) {
+        uint256 usdAmount = (tokenAmount * presale[presaleId].price * 10 ** 14) / 10 ** 16;
+        uint256 bnbAmount = (usdAmount * 10 ** 18) / getLatestPrice();
+        return bnbAmount;
     }
 }
